@@ -147,8 +147,12 @@ class McpClientManager:
                 parts.append(getattr(item, "text", ""))
             else:
                 parts.append(item.model_dump_json())
-        if result.structuredContent and not parts:
-            parts.append(str(result.structuredContent))
+        # mcp 1.x 为 structuredContent，2.x 改为 structured_content
+        structured = getattr(result, "structured_content", None)
+        if structured is None:
+            structured = getattr(result, "structuredContent", None)
+        if structured and not parts:
+            parts.append(str(structured))
         if not parts:
             parts.append("(no output)")
         return "\n".join(parts).strip()
@@ -221,9 +225,14 @@ class McpClientManager:
             http_client = await stack.enter_async_context(
                 httpx.AsyncClient(headers=config.headers or None)
             )
-            read_stream, write_stream, _get_session_id = await stack.enter_async_context(
+            streams = await stack.enter_async_context(
                 streamable_http_client(config.url, http_client=http_client)
             )
+            # 兼容不同 mcp SDK 版本：新版返回 2 元组，旧版返回 3 元组（含 get_session_id）
+            if len(streams) == 3:
+                read_stream, write_stream, _get_session_id = streams
+            else:
+                read_stream, write_stream = streams
             await self._register_connected_session(
                 name=name,
                 config=config,
@@ -273,7 +282,12 @@ class McpClientManager:
                 server_name=name,
                 name=tool.name,
                 description=tool.description or "",
-                input_schema=dict(tool.inputSchema or {"type": "object", "properties": {}}),
+                # 兼容 mcp 1.x (inputSchema) 与 2.x (input_schema)
+                input_schema=dict(
+                    getattr(tool, "inputSchema", None)
+                    or getattr(tool, "input_schema", None)
+                    or {"type": "object", "properties": {}}
+                ),
             )
             for tool in tool_result.tools
         ]
